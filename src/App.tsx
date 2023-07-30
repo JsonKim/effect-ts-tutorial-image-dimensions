@@ -1,7 +1,9 @@
 import { useState } from "react";
 import reactLogo from "./assets/react.svg";
 import "./App.css";
-import { Effect, pipe } from "effect";
+import { Effect, Layer, pipe } from "effect";
+import { ErrorOfReadingFile, ReadFileService } from "./ReadFileService";
+import { ErrorOfLoadingImage, LoadImageService } from "./LoadFileService";
 
 type ImageSize = { width: number; height: number };
 type FileStatus =
@@ -10,39 +12,39 @@ type FileStatus =
   | { _tag: "FileError" }
   | { _tag: "Selected"; size: ImageSize };
 
-class ErrorOfReadingFile {
-  readonly _tag = "ErrorOfReadingFile";
-}
+const ReadFileLive = Layer.succeed(
+  ReadFileService,
+  ReadFileService.of((file: File) =>
+    Effect.tryPromise({
+      try: () => {
+        const reader = new FileReader();
+        return new Promise<string>((resolve, reject) => {
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = (e) => reject(e);
+          reader.readAsDataURL(file);
+        });
+      },
+      catch: (_) => new ErrorOfReadingFile(),
+    }),
+  ),
+);
 
-const ReadFile = (file: File) =>
-  Effect.tryPromise({
-    try: () => {
-      const reader = new FileReader();
-      return new Promise<string>((resolve, reject) => {
-        reader.onload = () => resolve(reader.result as string);
-        reader.onerror = (e) => reject(e);
-        reader.readAsDataURL(file);
-      });
-    },
-    catch: (_) => new ErrorOfReadingFile(),
-  });
-
-class ErrorOfLoadingImage {
-  readonly _tag = "ErrorOfLoadingImage";
-}
-
-const LoadImage = (dataUrl: string) =>
-  Effect.tryPromise({
-    try: () => {
-      const img = new Image();
-      return new Promise<HTMLImageElement>((resolve, reject) => {
-        img.onload = () => resolve(img);
-        img.onerror = (e) => reject(e);
-        img.src = dataUrl;
-      });
-    },
-    catch: (_) => new ErrorOfLoadingImage(),
-  });
+const LoadImageLive = Layer.succeed(
+  LoadImageService,
+  LoadImageService.of((dataUrl: string) =>
+    Effect.tryPromise({
+      try: () => {
+        const img = new Image();
+        return new Promise<HTMLImageElement>((resolve, reject) => {
+          img.onload = () => resolve(img);
+          img.onerror = (e) => reject(e);
+          img.src = dataUrl;
+        });
+      },
+      catch: (_) => new ErrorOfLoadingImage(),
+    }),
+  ),
+);
 
 const getImageSize = <T extends ImageSize>({
   width,
@@ -51,10 +53,15 @@ const getImageSize = <T extends ImageSize>({
 
 const programOfGetImageSize = (file: File) =>
   pipe(
-    Effect.succeed(file),
-    Effect.flatMap(ReadFile),
-    Effect.flatMap(LoadImage),
-    Effect.map(getImageSize),
+    Effect.all([ReadFileService, LoadImageService]),
+    Effect.flatMap(([ReadFile, LoadImage]) =>
+      pipe(
+        Effect.succeed(file),
+        Effect.flatMap(ReadFile),
+        Effect.flatMap(LoadImage),
+        Effect.map(getImageSize),
+      ),
+    ),
   );
 
 function App() {
@@ -80,7 +87,10 @@ function App() {
       }),
     );
 
-    const result = await Effect.runPromise(program);
+    const runnable: Effect.Effect<never, never, FileStatus> =
+      Effect.provideLayer(program, Layer.merge(ReadFileLive, LoadImageLive));
+
+    const result = await Effect.runPromise(runnable);
 
     setStatus(result);
   };
