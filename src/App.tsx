@@ -1,6 +1,7 @@
 import { useState } from "react";
 import reactLogo from "./assets/react.svg";
 import "./App.css";
+import { Effect, pipe } from "effect";
 
 type ImageSize = { width: number; height: number };
 type FileStatus =
@@ -9,26 +10,52 @@ type FileStatus =
   | { _tag: "FileError" }
   | { _tag: "Selected"; size: ImageSize };
 
+class ErrorOfReadingFile {
+  readonly _tag = "ErrorOfReadingFile";
+}
+
 const ReadFile = (file: File) =>
-  new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = (e) => reject(e);
-    reader.readAsDataURL(file);
+  Effect.tryPromise({
+    try: () => {
+      const reader = new FileReader();
+      return new Promise<string>((resolve, reject) => {
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = (e) => reject(e);
+        reader.readAsDataURL(file);
+      });
+    },
+    catch: (_) => new ErrorOfReadingFile(),
   });
 
+class ErrorOfLoadingImage {
+  readonly _tag = "ErrorOfLoadingImage";
+}
+
 const LoadImage = (dataUrl: string) =>
-  new Promise<HTMLImageElement>((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = (e) => reject(e);
-    img.src = dataUrl;
+  Effect.tryPromise({
+    try: () => {
+      const img = new Image();
+      return new Promise<HTMLImageElement>((resolve, reject) => {
+        img.onload = () => resolve(img);
+        img.onerror = (e) => reject(e);
+        img.src = dataUrl;
+      });
+    },
+    catch: (_) => new ErrorOfLoadingImage(),
   });
 
 const getImageSize = <T extends ImageSize>({
   width,
   height,
 }: T): ImageSize => ({ width, height });
+
+const programOfGetImageSize = (file: File) =>
+  pipe(
+    Effect.succeed(file),
+    Effect.flatMap(ReadFile),
+    Effect.flatMap(LoadImage),
+    Effect.map(getImageSize),
+  );
 
 function App() {
   const [count, setCount] = useState(0);
@@ -41,15 +68,21 @@ function App() {
       return;
     }
 
-    try {
-      const dataUrl = await ReadFile(file);
-      const img = await LoadImage(dataUrl);
-      setStatus({ _tag: "Selected", size: getImageSize(img) });
-    } catch (e) {
-      // 에러 식별이 어렵다.
-      setStatus({ _tag: "FileError" });
-      console.error(e);
-    }
+    const program = programOfGetImageSize(file).pipe(
+      // 이미지 변환 성공시 status로 인코딩
+      Effect.map((size) => ({ _tag: "Selected", size } as const)),
+      // 에러를 status로 인코딩
+      Effect.catchTags({
+        ErrorOfReadingFile: () =>
+          Effect.succeed({ _tag: "FileError" } as const),
+        ErrorOfLoadingImage: () =>
+          Effect.succeed({ _tag: "NotImage" } as const),
+      }),
+    );
+
+    const result = await Effect.runPromise(program);
+
+    setStatus(result);
   };
 
   return (
