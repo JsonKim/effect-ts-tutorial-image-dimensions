@@ -9,36 +9,47 @@ type FileStatus =
   | { _tag: "FileError" }
   | { _tag: "Selected"; size: ImageSize };
 
+const ReadFile = (file: File) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = (e) => reject(e);
+    reader.readAsDataURL(file);
+  });
+
+const LoadImage = (dataUrl: string) =>
+  new Promise<HTMLImageElement>((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = (e) => reject(e);
+    img.src = dataUrl;
+  });
+
+const getImageSize = <T extends ImageSize>({
+  width,
+  height,
+}: T): ImageSize => ({ width, height });
+
 function App() {
   const [count, setCount] = useState(0);
   const [status, setStatus] = useState<FileStatus>({ _tag: "NotSelected" });
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file === undefined) {
       setStatus({ _tag: "NotSelected" });
       return;
     }
 
-    const reader = new FileReader();
-    reader.onload = () => {
-      const text = reader.result;
-      const img = new Image();
-      img.onload = () => {
-        setStatus({
-          _tag: "Selected",
-          size: { width: img.width, height: img.height },
-        });
-      };
-      img.onerror = () => {
-        setStatus({ _tag: "NotImage" });
-      };
-      img.src = text as string;
-    };
-    reader.onerror = () => {
+    try {
+      const dataUrl = await ReadFile(file);
+      const img = await LoadImage(dataUrl);
+      setStatus({ _tag: "Selected", size: getImageSize(img) });
+    } catch (e) {
+      // 에러 식별이 어렵다.
       setStatus({ _tag: "FileError" });
-    };
-    reader.readAsDataURL(file);
+      console.error(e);
+    }
   };
 
   return (
